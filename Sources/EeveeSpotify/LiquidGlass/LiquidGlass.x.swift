@@ -1,9 +1,32 @@
 import EeveeSpotifyC
 import Foundation
 import Orion
+import UIKit
 
 enum LiquidGlass {
     static let launchOptions = UserDefaults.liquidGlassOptions
+
+    // Resume recovery is bounded and scoped to our own chrome; never unhide
+    // Spotify's containers, which may be intentionally hidden by the player.
+    private static var resumeGeneration = 0
+    private static let resumeObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { _ in
+        guard #available(iOS 26.0, *), launchOptions.enabled else { return }
+        resumeGeneration += 1
+        let generation = resumeGeneration
+        for delay in [0.0, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard generation == resumeGeneration,
+                      UIApplication.shared.applicationState == .active else { return }
+                applyDefaults()
+                if launchOptions.tabBar { GlassTabBar.restoreAfterResume() }
+                if launchOptions.nowPlayingBar { GlassNowPlayingBar.restoreAfterResume() }
+            }
+        }
+    }
+
+    fileprivate static func observeResume() { _ = resumeObserver }
 
     private static let spotifyOverrideKey = "LiquidGlassOverride"
     private static let swiftUIOptOutKey = "com.apple.SwiftUI.IgnoreSolariumOptOut"
@@ -88,6 +111,7 @@ func activateLiquidGlass() {
     }
 
     LiquidGlass.applyDefaults()
+    LiquidGlass.observeResume()
     plist = EeveeSetMainInfoValue("UIDesignRequiresCompatibility", false as NSNumber) ? "patched" : "FAILED"
 
     var tabBar = false, nowPlaying = false
