@@ -33,6 +33,20 @@ enum GlassNowPlayingBar {
         options.albumTint ? albumColor?.withAlphaComponent(0.2) : nil
     }
 
+    static func restoreAfterResume() {
+        guard let container, container.viewIfLoaded?.window != nil else { return }
+        styled = nil
+        misses = 0
+        if let pane {
+            let effect = UIGlassEffect(style: .regular)
+            effect.tintColor = tint
+            pane.effect = effect
+            pane.isHidden = false
+            pane.alpha = 1
+        }
+        style(container)
+    }
+
     static func style(_ container: UIViewController) {
         _ = observer
         self.container = container
@@ -64,6 +78,7 @@ enum GlassNowPlayingBar {
         let frame = card.convert(card.bounds, to: host)
         let now = Styled(frame: frame, artwork: artwork?.bounds.size, options: options)
         if now == styled, let pane, pane.superview === host, host.subviews.first === pane, pane.frame == frame,
+           pane.effect is UIGlassEffect, !pane.isHidden, pane.alpha == 1,
            card.layer.cornerRadius == card.bounds.height / 2, artwork.map({ $0.layer.cornerRadius == artworkRadius($0) }) != false {
             GlassKit.tint(pane, tint)
             return
