@@ -6,6 +6,9 @@ enum GlassKit {
 
     static func pane(in host: UIView, key: UnsafeRawPointer = UnsafeRawPointer(&paneKey)) -> UIVisualEffectView {
         if let pane = objc_getAssociatedObject(host, key) as? UIVisualEffectView {
+            if !(pane.effect is UIGlassEffect) { pane.effect = UIGlassEffect(style: .regular) }
+            pane.isHidden = false
+            pane.alpha = 1
             if pane.superview !== host { host.insertSubview(pane, at: 0) }
             else if host.subviews.first !== pane { host.sendSubviewToBack(pane) }
             return pane
