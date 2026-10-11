@@ -12,10 +12,12 @@ final class GlassSystemTabBar: UITabBar, UITabBarDelegate {
 
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
         guard let index = items?.firstIndex(of: item), index < sources.count else { return }
+        eeveeLog("[EeveeSpotify][Glass] Tab %d tap received", index)
         switch sources[index] {
         case .stock(let source):
             CustomTabs.deselect()
-            if !EeveeFireTap(source) {
+            guard let stock else { return }
+            if !GlassTabBar.forwardTap(source, in: stock) {
                 eeveeLog("[EeveeSpotify][Glass] Tab %d '%@' tap FAILED", index, item.title ?? "")
             }
         case .custom(let tab):
@@ -46,6 +48,12 @@ enum GlassTabBar {
     private static var launchTabApplied = false
     private static var filmKey: UInt8 = 0
     private static var platterLogged = false
+    private static var rebuildOnResume = true
+    private static let inactiveObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+    ) { _ in
+        rebuildOnResume = true
+    }
     private static let tintObserver = NotificationCenter.default.addObserver(
         forName: .eeveeAlbumColorChanged, object: nil, queue: .main
     ) { _ in
@@ -61,15 +69,69 @@ enum GlassTabBar {
     }
 
     static func restoreAfterResume() {
-        guard let stock, stock.window != nil else { return }
+        guard let stock, stock.window != nil,
+              UIApplication.shared.applicationState == .active else { return }
+        row = nil
+        // Only this known tab-bar host is repaired. Do not enable arbitrary
+        // ancestors that Spotify may intentionally disable during a modal.
+        stock.isUserInteractionEnabled = true
+        if let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar {
+            bar.delegate = bar
+            bar.stock = stock
+            bar.isUserInteractionEnabled = true
+        }
+        // A new native bar also discards UIKit's suspended internal controls.
+        // Resume is called twice; rebuild only once per inactive/active cycle.
+        if rebuildOnResume, let currentRow = tabRow(in: stock),
+           currentRow.arrangedSubviews.contains(where: { !$0.isHidden && $0.bounds.width >= 20 }) {
+            if let old = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar {
+                old.delegate = nil
+                old.removeFromSuperview()
+            }
+            objc_setAssociatedObject(stock, &barKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            appliedOptions = nil
+            platterView = nil
+            rebuildOnResume = false
+            eeveeLog("[EeveeSpotify][Glass] Resume: rebuilding tab bar and actions")
+        }
         sync(stock)
+        // Report a blocked ancestor without changing Spotify's modal state.
+        var ancestor = stock.superview
+        while let view = ancestor {
+            if !view.isUserInteractionEnabled {
+                eeveeLog("[EeveeSpotify][Glass] Resume: touch blocked by ancestor %@",
+                         NSStringFromClass(type(of: view)))
+                break
+            }
+            ancestor = view.superview
+        }
+    }
+
+    static func forwardTap(_ source: UIView, in stock: UIView) -> Bool {
+        let wantedTitle = label(in: source)?.text
+        // Rediscover the current row at tap time too: Spotify can replace its
+        // controls after the bounded resume passes have finished.
+        row = nil
+        sync(stock)
+        guard let currentRow = tabRow(in: stock) else { return false }
+        let candidates = currentRow.arrangedSubviews.filter { !$0.isHidden && $0.bounds.width >= 20 }
+        let current = candidates.first(where: { $0 === source }) ?? candidates.first(where: {
+            guard let wantedTitle, !wantedTitle.isEmpty else { return false }
+            return label(in: $0)?.text == wantedTitle
+        })
+        guard let current, current.isDescendant(of: stock) else { return false }
+        return EeveeFireTap(current)
     }
 
     static func sync(_ stock: UIView) {
         _ = observer
         _ = tintObserver
+        _ = inactiveObserver
         self.stock = stock
         let bar = systemBar(on: stock)
+        bar.stock = stock
+        bar.delegate = bar
+        bar.isUserInteractionEnabled = true
         guard let row = tabRow(in: stock) else { return }
         row.superview?.layoutIfNeeded()
 
@@ -163,7 +225,8 @@ enum GlassTabBar {
         bar.setItems(fresh, animated: false)
         if let selected, selected < fresh.count { bar.selectedItem = fresh[selected] }
         bar.layoutIfNeeded()
-        UIView.animate(withDuration: 0.2) { bar.alpha = 1 }
+        UIView.animate(withDuration: 0.2, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) { bar.alpha = 1 }
         eeveeLog("[EeveeSpotify][Glass] Tab bar revealed after %d retries", retries)
     }
 
@@ -309,6 +372,12 @@ enum GlassTabBar {
 class GlassTabBarViewHook: ClassHook<UIView> {
     typealias Group = GlassTabBarGroup
     static let targetName = "_TtC23NavigationUI_TabBarImpl10TabBarView"
+
+    func didMoveToWindow() {
+        orig.didMoveToWindow()
+        guard #available(iOS 26.0, *), target.window != nil else { return }
+        GlassTabBar.sync(target)
+    }
 
     func layoutSubviews() {
         orig.layoutSubviews()
