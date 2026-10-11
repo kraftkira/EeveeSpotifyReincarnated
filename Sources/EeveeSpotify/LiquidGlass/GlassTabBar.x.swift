@@ -60,6 +60,11 @@ enum GlassTabBar {
         if let stock { sync(stock) }
     }
 
+    static func restoreAfterResume() {
+        guard let stock, stock.window != nil else { return }
+        sync(stock)
+    }
+
     static func sync(_ stock: UIView) {
         _ = observer
         _ = tintObserver
@@ -145,7 +150,11 @@ enum GlassTabBar {
             sub.alpha = 0
             sub.isUserInteractionEnabled = false
         }
-        guard bar.isHidden else { return }
+        guard bar.isHidden else {
+            // A background transition can interrupt the initial fade at alpha 0.
+            if bar.alpha != 1 { bar.alpha = 1 }
+            return
+        }
         bar.alpha = 0
         bar.isHidden = false
         // Items laid out while hidden keep squashed labels, so they're rebuilt once visible.
@@ -226,7 +235,11 @@ enum GlassTabBar {
     }
 
     private static func systemBar(on stock: UIView) -> GlassSystemTabBar {
-        if let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar { return bar }
+        if let bar = objc_getAssociatedObject(stock, &barKey) as? GlassSystemTabBar {
+            // The association survives removal during Spotify's UI transitions.
+            if bar.superview !== stock { stock.addSubview(bar) }
+            return bar
+        }
         let bar = GlassSystemTabBar(frame: barFrame(in: stock))
         bar.isHidden = true
         bar.overrideUserInterfaceStyle = .dark
